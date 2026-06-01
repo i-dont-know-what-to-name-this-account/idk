@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>tetris that i stole of chat gpt</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--accent:#e6b800;--muted:#9aa6b2}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    body{background:linear-gradient(180deg,#07101a 0%, #09121a 100%);display:flex;align-items:center;justify-content:center;color:#dfe7ee}
+    .wrap{display:flex;gap:24px;align-items:flex-start}
+    .game{background:var(--panel);padding:14px;border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,.6)}
+    canvas{background:#071226;display:block;border-radius:6px;image-rendering:pixelated}
+    .side{width:260px}
+    h1{font-size:18px;margin:0 0 8px}
+    .stats{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+    .card{background:#071726;padding:8px;border-radius:8px}
+    .big{font-size:20px;font-weight:700}
+    .small{font-size:12px;color:var(--muted)}
+    .nexts{display:flex;flex-direction:column;gap:10px}
+    .controls{margin-top:10px;font-size:13px;color:var(--muted);line-height:1.6}
+    button{background:var(--accent);border:0;color:#071226;padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer}
+    footer{margin-top:8px;font-size:12px;color:var(--muted)}
+    .ghost{opacity:.35}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="game">
+      <h1>Tetris</h1>
+      <canvas id="board" width="200" height="400"></canvas>
+    </div>
+    <div class="side">
+      <div class="stats">
+        <div class="card"><div class="small">Score</div><div id="score" class="big">0</div></div>
+        <div class="card"><div class="small">Level</div><div id="level" class="big">0</div></div>
+        <div class="card"><div class="small">Lines</div><div id="lines" class="big">0</div></div>
+        <div class="card"><div class="small">Status</div><div id="state" class="big">Playing</div></div>
+      </div>
+      <div class="card" style="padding:12px">
+        <div class="small">Next</div>
+        <div id="nexts" style="display:flex;gap:8px;margin-top:8px"></div>
+      </div>
+      <div class="card controls">
+        <div><strong>Controls</strong></div>
+        <div>← → : Move</div>
+        <div>Up / X : Rotate CW</div>
+        <div>Z : Rotate CCW</div>
+        <div>↓ : Soft drop</div>
+        <div>Space : Hard drop</div>
+        <div>P : Pause</div>
+        <div>R : Restart</div>
+      </div>
+      <div style="margin-top:10px"><button id="restartBtn">Restart</button></div>
+      <footer>Created for you — classic mechanics with modern refinements.</footer>
+    </div>
+  </div>
+
+<script>
+/*
+  Classic-ish Tetris implementation:
+  - Playfield 10x20
+  - 7-bag randomizer
+  - Super Rotation System (approx) with simple wall kicks similar to classic
+  - Scoring table compatible with NES-like scoring
+  - Level increases every 10 lines
+  - DAS-like repeat for horizontal movement
+  - Soft drop and hard drop
+  Notes: This aims to reproduce the feel of classic Tetris while remaining playable in browser.
+*/
+
+const COLS = 10, ROWS = 20, BLOCK = 20;
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+canvas.style.width = (COLS*BLOCK) + 'px';
+canvas.style.height = (ROWS*BLOCK) + 'px';
+canvas.width = COLS*BLOCK;
+canvas.height = ROWS*BLOCK;
+ctx.imageSmoothingEnabled = false;
+
+// DOM
+const scoreEl = document.getElementById('score');
+const levelEl = document.getElementById('level');
+const linesEl = document.getElementById('lines');
+const stateEl = document.getElementById('state');
+const nextsEl = document.getElementById('nexts');
+const restartBtn = document.getElementById('restartBtn');
+
+// Pieces (4x4 matrices)
+const TETROMINOES = {
+  I: {color:'#00f0f0', matrix:[
+    [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
+    [[0,0,1,0],[0,0,1,0],[0,0,1,0],[0,0,1,0]],
+    [[0,0,0,0],[0,0,0,0],[1,1,1,1],[0,0,0,0]],
+    [[0,1,0,0],[0,1,0,0],[0,1,0,0],[0,1,0,0]]
+  ]},
+  J: {color:'#0000f0', matrix:[
+    [[1,0,0],[1,1,1],[0,0,0]],
+    [[0,1,1],[0,1,0],[0,1,0]],
+    [[0,0,0],[1,1,1],[0,0,1]],
+    [[0,1,0],[0,1,0],[1,1,0]]
+  ]},
+  L: {color:'#f0a000', matrix:[
+    [[0,0,1],[1,1,1],[0,0,0]],
+    [[0,1,0],[0,1,0],[0,1,1]],
+    [[0,0,0],[1,1,1],[1,0,0]],
+    [[1,1,0],[0,1,0],[0,1,0]]
+  ]},
+  O: {color:'#f0f000', matrix:[
+    [[1,1],[1,1]],
+    [[1,1],[1,1]],
+    [[1,1],[1,1]],
+    [[1,1],[1,1]]
+  ]},
+  S: {color:'#00f000', matrix:[
+    [[0,1,1],[1,1,0],[0,0,0]],
+    [[0,1,0],[0,1,1],[0,0,1]],
+    [[0,0,0],[0,1,1],[1,1,0]],
+    [[1,0,0],[1,1,0],[0,1,0]]
+  ]},
+  Z: {color:'#f00000', matrix:[
+    [[1,1,0],[0,1,1],[0,0,0]],
+    [[0,0,1],[0,1,1],[0,1,0]],
+    [[0,0,0],[1,1,0],[0,1,1]],
+    [[0,1,0],[1,1,0],[1,0,0]]
+  ]},
+  T: {color:'#a000f0', matrix:[
+    [[0,1,0],[1,1,1],[0,0,0]],
+    [[0,1,0],[0,1,1],[0,1,0]],
+    [[0,0,0],[1,1,1],[0,1,0]],
+    [[0,1,0],[1,1,0],[0,1,0]]
+  ]}
+};
+
+// Create empty playfield
+function createField(){
+  const field = [];
+  for(let r=0;r<ROWS;r++){
+    field.push(new Array(COLS).fill(0));
+  }
+  return field;
+}
+
+let field = createField();
+let score=0, lines=0, level=0;
+let dropCounter = 0, dropInterval = 1000; // ms per drop
+let lastTime = 0;
+let gameOver=false, paused=false;
+
+// Bag randomizer
+function createBag(){
+  const pieces = Object.keys(TETROMINOES);
+  const bag = [...pieces];
+  for(let i=bag.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [bag[i],bag[j]] = [bag[j],bag[i]];
+  }
+  return bag;
+}
+
+let bag = [];
+function nextPieceFromBag(){
+  if(bag.length===0) bag = createBag();
+  return bag.pop();
+}
+
+// Active piece
+let active = null;
+let nextQueue = [];
+
+function spawnPiece(){
+  if(nextQueue.length<7){
+    while(nextQueue.length<7) nextQueue.push(nextPieceFromBag());
+  }
+  const type = nextQueue.shift();
+  // ensure replenish
+  while(nextQueue.length<7) nextQueue.push(nextPieceFromBag());
+
+  const piece = {
+    type,
+    matrix: cloneMatrix(TETROMINOES[type].matrix),
+    rot: 0,
+    x: Math.floor((COLS - getMatrixSize(type))/2),
+    y: -getSpawnOffset(type)
+  };
+  active = piece;
+  if(collision(active,0,0)){
+    // spawn collides -> game over
+    gameOver=true;
+    stateEl.textContent = 'Game Over';
+  }
+}
+
+function getMatrixSize(type){
+  const mat = TETROMINOES[type].matrix[0];
+  return mat.length;
+}
+function getSpawnOffset(type){
+  // some pieces start slightly above
+  return getMatrixSize(type)===4?1:0;
+}
+
+function cloneMatrix(m){
+  return JSON.parse(JSON.stringify(m));
+}
+
+function collision(piece,offsetX,offsetY,rot=null){
+  const r = rot===null?piece.rot:rot;
+  const mat = TETROMINOES[piece.type].matrix[r];
+  for(let y=0;y<mat.length;y++){
+    for(let x=0;x<mat[y].length;x++){
+      if(mat[y][x]){
+        const px = piece.x + x + offsetX;
+        const py = piece.y + y + offsetY;
+        if(px<0 || px>=COLS || py>=ROWS) return true;
+        if(py>=0 && field[py][px]) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function lockPiece(){
+  const mat = TETROMINOES[active.type].matrix[active.rot];
+  for(let y=0;y<mat.length;y++){
+    for(let x=0;x<mat[y].length;x++){
+      if(mat[y][x]){
+        const px = active.x + x;
+        const py = active.y + y;
+        if(py>=0 && py<ROWS && px>=0 && px<COLS) field[py][px] = active.type;
+      }
+    }
+  }
+  clearLines();
+  spawnPiece();
+}
+
+function clearLines(){
+  let cleared=0;
+  for(let y=ROWS-1;y>=0;y--){
+    if(field[y].every(c=>c!==0)){
+      field.splice(y,1);
+      field.unshift(new Array(COLS).fill(0));
+      cleared++;
+      y++; // recheck same row index after shift
+    }
+  }
+  if(cleared>0){
+    // scoring similar to classic NES Tetris
+    const points = {1:40,2:100,3:300,4:1200}[cleared] || 0;
+    score += points * (level+1);
+    lines += cleared;
+    const prevLevel = level;
+    level = Math.floor(lines/10);
+    if(level!==prevLevel) {
+      // speed increases
+      updateDropInterval();
+    }
+    scoreEl.textContent = score;
+    linesEl.textContent = lines;
+    levelEl.textContent = level;
+  }
+}
+
+function updateDropInterval(){
+  // Table inspired by classic timings (ms per automatic drop at each level)
+  // Not exact NES frames, but provides a classic feel.
+  const table = [1000, 793, 618, 473, 355, 262, 190, 135, 94, 64, 43,28,18,13,8,5,3,2,1];
+  dropInterval = table[Math.min(level, table.length-1)];
+}
+
+// Move & rotate
+function move(dir){
+  if(!active || gameOver || paused) return;
+  if(!collision(active,dir,0)) active.x += dir;
+}
+
+function rotate(dir){
+  if(!active || gameOver || paused) return;
+  const newRot = (active.rot + dir + 4)%4;
+  // simple wall-kick attempts
+  const kicks = [[0,0],[ -1,0],[1,0],[-2,0],[2,0],[0,-1]];
+  for(const k of kicks){
+    if(!collision(active,k[0],k[1],newRot)){
+      active.rot = newRot;
+      active.x += k[0];
+      active.y += k[1];
+      return;
+    }
+  }
+}
+
+function hardDrop(){
+  if(!active || gameOver || paused) return;
+  while(!collision(active,0,1)) active.y++;
+  lockPiece();
+}
+
+function softDrop(){
+  if(!active || gameOver || paused) return;
+  if(!collision(active,0,1)){
+    active.y++;
+    score += 1; // small score for soft drop
+  } else {
+    lockPiece();
+  }
+}
+
+// Input handling with basic DAS
+let keys = {};
+let das = {dir:0, counter:0, delay:12, repeat:2};
+window.addEventListener('keydown',e=>{
+  if(e.repeat) return; // handle auto via our DAS
+  switch(e.key){
+    case 'ArrowLeft': startDAS(-1); break;
+    case 'ArrowRight': startDAS(1); break;
+    case 'ArrowUp': rotate(1); break;
+    case 'x': case 'X': rotate(1); break;
+    case 'z': case 'Z': rotate(-1); break;
+    case ' ': e.preventDefault(); hardDrop(); break;
+    case 'ArrowDown': keys['ArrowDown']=true; break;
+    case 'p': case 'P': togglePause(); break;
+    case 'r': case 'R': restart(); break;
+  }
+});
+window.addEventListener('keyup',e=>{
+  switch(e.key){
+    case 'ArrowLeft': stopDAS(-1); break;
+    case 'ArrowRight': stopDAS(1); break;
+    case 'ArrowDown': keys['ArrowDown']=false; break;
+  }
+});
+
+function startDAS(direction){
+  das.dir = direction; das.counter = 0; keys['das']=true; move(direction);
+}
+function stopDAS(direction){
+  if(das.dir===direction) { das.dir=0; keys['das']=false; }
+}
+
+// Draw
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // draw field
+  for(let y=0;y<ROWS;y++){
+    for(let x=0;x<COLS;x++){
+      drawBlock(x,y,field[y][x]);
+    }
+  }
+  if(active){
+    // ghost
+    const ghostY = getGhostY();
+    drawPiece(active, 0, ghostY, true);
+    drawPiece(active, 1);
+  }
+}
+function drawPiece(piece, fill=1, ghost=false){
+  const mat = TETROMINOES[piece.type].matrix[piece.rot];
+  for(let y=0;y<mat.length;y++){
+    for(let x=0;x<mat[y].length;x++){
+      if(mat[y][x]){
+        const px = piece.x + x;
+        const py = piece.y + y;
+        if(py>=0) drawBlock(px,py,piece.type, ghost);
+      }
+    }
+  }
+}
+function getGhostY(){
+  let y = active.y;
+  while(!collision(active,0,1)){ active.y++; }
+  const ghostY = active.y;
+  active.y = y;
+  return ghostY - active.y;
+}
+
+function drawBlock(x,y,type, ghost=false){
+  if(type===0) {
+    // empty grid cell background subtle
+    ctx.fillStyle = '#071226';
+    ctx.fillRect(x*BLOCK, y*BLOCK, BLOCK-1, BLOCK-1);
+    return;
+  }
+  const color = TETROMINOES[type].color || '#888';
+  ctx.fillStyle = color;
+  if(ghost) ctx.globalAlpha = 0.25;
+  ctx.fillRect(x*BLOCK, y*BLOCK, BLOCK-1, BLOCK-1);
+  ctx.globalAlpha = 1.0;
+  // small bevel
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.strokeRect(x*BLOCK+0.5, y*BLOCK+0.5, BLOCK-2, BLOCK-2);
+}
+
+// Game loop
+function update(time=0){
+  if(!lastTime) lastTime = time;
+  const delta = time - lastTime;
+  lastTime = time;
+  if(!gameOver && !paused){
+    dropCounter += delta;
+    // DAS handling
+    if(keys['das'] && das.dir!==0){
+      das.counter++;
+      if(das.counter>das.delay){
+        if((das.counter - das.delay) % das.repeat === 0) move(das.dir);
+      }
+    }
+    // soft drop
+    if(keys['ArrowDown']){
+      // faster than normal
+      if(dropCounter > dropInterval/10){
+        softDrop(); dropCounter = 0;
+      }
+    }
+    if(dropCounter > dropInterval){
+      if(!collision(active,0,1)){
+        active.y++;
+      } else {
+        lockPiece();
+      }
+      dropCounter = 0;
+    }
+  }
+  draw();
+  requestAnimationFrame(update);
+}
+
+function togglePause(){
+  if(gameOver) return;
+  paused = !paused;
+  stateEl.textContent = paused? 'Paused':'Playing';
+}
+
+function restart(){
+  field = createField(); bag=[]; nextQueue=[]; score=0; lines=0; level=0; gameOver=false; paused=false; updateDropInterval();
+  spawnPiece(); scoreEl.textContent = score; linesEl.textContent = lines; levelEl.textContent = level; stateEl.textContent = 'Playing';
+}
+
+restartBtn.addEventListener('click', restart);
+
+// Init
+function init(){
+  updateDropInterval();
+  for(let i=0;i<7;i++) nextQueue.push(nextPieceFromBag());
+  spawnPiece();
+  refreshNexts();
+  requestAnimationFrame(update);
+}
+
+function refreshNexts(){
+  nextsEl.innerHTML = '';
+  for(let i=0;i<6;i++){
+    const t = nextQueue[i];
+    const c = document.createElement('canvas');
+    c.width = 4*BLOCK; c.height = 4*BLOCK; c.style.width='64px'; c.style.height='64px';
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = false;
+    // draw small piece centered
+    const mat = TETROMINOES[t].matrix[0];
+    for(let y=0;y<mat.length;y++){
+      for(let x=0;x<mat[y].length;x++){
+        if(mat[y][x]){
+          g.fillStyle = TETROMINOES[t].color;
+          g.fillRect(x*BLOCK, y*BLOCK, BLOCK-1, BLOCK-1);
+        }
+      }
+    }
+    nextsEl.appendChild(c);
+  }
+}
+
+// Refresh next queue display when queue changes
+setInterval(refreshNexts, 200);
+
+// start
+init();
+</script>
+</body>
+</html>
+
